@@ -1,9 +1,9 @@
 /* stdlib is needed for the abs function */
 #include <stdlib.h>
 /*
-   The following prototype code was provided by Doug Tody, NRAO, for
-   performing conversion between pixel arrays and line lists.  The
-   compression technique is used in IRAF.
+   The following code is a refactored version of the original pliocomp.c source
+   file in cfitsio with a majority of the gotos replaced with loops/conditional
+   branches and with constants cleaned up to match the original IRAF PLIO code
 */
 int pl_p2li_new (int *pxsrc, int xs, short *lldst, int npix);
 int pl_l2pi_new (short *ll_src, int xs, int *px_dst, int npix);
@@ -74,7 +74,6 @@ int pl_l2pi_new (short *ll_src, int xs, int *px_dst, int npix);
  * PL_P2L -- Convert a pixel array to a line list.  The length of the list is
  * returned as the function value.
  *
- * Translated from the SPP version using xc -f, f2c.  8Sep99 DCT.
  */
 
 int pl_p2li_new (int *pxsrc, int xs, short *lldst, int npix)
@@ -87,7 +86,7 @@ int pl_p2li_new (int *pxsrc, int xs, short *lldst, int npix)
     /* Local variables */
     int zero, v, x1, hi, ip, dv, xe, np, op, iz, nv = 0, pv, nz;
 
-    /* Parameter adjustments */
+    /* Decrement the array pointers as C is 0 based and algo is 1 based for array indexes */
     --lldst;
     --pxsrc;
 
@@ -221,8 +220,6 @@ done:
  * PL_L2PI -- Translate a PLIO line list into an integer pixel array.
  * The number of pixels output (always npix) is returned as the function
  * value.
- *
- * Translated from the SPP version using xc -f, f2c.  8Sep99 DCT.
  */
 
 int pl_l2pi_new (short *ll_src, int xs, int *px_dst, int npix)
@@ -237,7 +234,7 @@ int pl_l2pi_new (short *ll_src, int xs, int *px_dst, int npix)
     int skipwd;
     int putpix;
 
-    /* Parameter adjustments */
+    /* Decrement the array pointers as C is 0 based and algo is 1 based for array indexes */
     --px_dst;
     --ll_src;
 

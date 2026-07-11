@@ -3,6 +3,8 @@ name = "pliocomp"
 version = "0.1.0"
 edition = "2021"
 repository = "https://github.com/petesmc/pliocomp.git"
+description = "PLIO Compression Library"
+license = "MIT"
 
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
