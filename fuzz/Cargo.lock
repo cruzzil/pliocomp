@@ -85,7 +85,7 @@ dependencies = [
 
 [[package]]
 name = "pliocomp"
-version = "0.2.0"
+version = "0.3.1"
 
 [[package]]
 name = "pliocomp-fuzz"

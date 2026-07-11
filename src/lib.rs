@@ -240,7 +240,7 @@ pub fn pl_l2pi(ll_src: &[i16], xs: i32, px_dst: &mut [i32], npix: usize) -> usiz
         lllen = ll_src[OLL_LEN] as i32;
         llfirt = (OLL_FIRST as i32) - 1;
     } else {
-        lllen = ((ll_src[LL_LENHI] << 15) + ll_src[LL_LENLO]) as i32; // LL_LEN
+        lllen = ((ll_src[LL_LENHI] as i32) << 15) + ll_src[LL_LENLO] as i32; // LL_LEN
         llfirt = (ll_src[LL_HDRLEN]) as i32; // LL_FIRST
     }
 
@@ -297,7 +297,10 @@ pub fn pl_l2pi(ll_src: &[i16], xs: i32, px_dst: &mut [i32], npix: usize) -> usiz
                 x1 = x2 + 1;
             }
             I_SH => {
-                pv = ((ll_src[(ip + 1) as usize] << 12) as i32) + data;
+                // Widen to i32 *before* shifting: the high word can be >= 8,
+                // which would overflow the i16 when shifted left by 12 and
+                // corrupt the reconstructed pixel value.
+                pv = ((ll_src[(ip + 1) as usize] as i32) << 12) + data;
                 skipwd = true;
             }
 

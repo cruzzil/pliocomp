@@ -55,10 +55,12 @@ the returned length reports how much was actually written.
 
 ### Round-trip caveats
 
-PLIO can only represent **non-negative** values up to **32767** (values travel through
-`i16` words). Negative inputs decode back as `0`, and values above 32767 are silently
-truncated — these are format limits, not bugs. See the algorithm document below for the
-full details.
+PLIO can only represent **non-negative** values: negative inputs decode back as `0`. This
+is a format limit, not a bug. Very large high values are also bounded by the `i16` words
+the format is built on. See the algorithm document below for the full details.
+
+> **Note:** versions before **0.4.0** silently corrupted any pixel value larger than 12
+> bits (> 4095) on decode. If you rely on values above 4095, use 0.4.0 or later.
 
 ## Algorithm
 
