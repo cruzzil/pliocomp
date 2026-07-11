@@ -2,10 +2,14 @@
 name = "pliocomp"
 version = "0.3.0"
 edition = "2024"
-repository = "https://github.com/cruzil/pliocomp.git"
-description = "PLIO Compression Library"
+description = "PLIO (Pixel List I/O) mask compression, as used in FITS tile compression"
+repository = "https://github.com/cruzzil/pliocomp.git"
+homepage = "https://github.com/cruzzil/pliocomp"
+documentation = "https://docs.rs/pliocomp"
+readme = "README.md"
 license = "MIT"
-
+keywords = ["plio", "compression", "fits", "mask", "iraf"]
+categories = ["compression", "encoding", "science"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
