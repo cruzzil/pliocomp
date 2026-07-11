@@ -153,7 +153,7 @@ pub fn pl_p2li(pxsrc: &[i32], xs: i32, lldst: &mut [i16], npix: usize) -> usize 
                     // Convert to IS or DS if range is a single pixel.
                     if np == 1 && nz == 0 {
                         v = lldst[op - 1];
-                        lldst[op - 1] = (v | M_MOVE) as i16;
+                        lldst[op - 1] = v | M_MOVE;
                         np = 0; // goto done
                     }
                 }
@@ -311,7 +311,7 @@ pub fn pl_l2pi(ll_src: &[i16], xs: i32, px_dst: &mut [i32], npix: usize) -> usiz
 
         if putpix {
             if x1 >= xs && x1 <= xe {
-                px_dst[op as usize] = pv;
+                px_dst[op] = pv;
                 op += 1;
             }
 
@@ -355,6 +355,6 @@ mod tests {
 
         let res2 = pl_l2pi(&compressed, xs, &mut uncompressed, npix);
 
-        println!("Uncompressed items: {res}");
+        println!("Uncompressed items: {res2}");
     }
 }
