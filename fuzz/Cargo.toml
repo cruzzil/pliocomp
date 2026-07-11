@@ -3,14 +3,15 @@ name = "pliocomp-fuzz"
 version = "0.0.0"
 authors = ["Automatically generated"]
 publish = false
-edition = "2018"
+edition = "2024"
 
 [package.metadata]
 cargo-fuzz = true
 
 [dependencies]
-libfuzzer-sys = "0.4"
-pliocomp = { path = "..", features = ["arbitrary"] }
+libfuzzer-sys = "^0.4"
+arbitrary = { version = "^1.4", features = ["derive"] }
+pliocomp = { path = ".." }
 
 # Prevent this from interfering with workspaces
 [workspace]

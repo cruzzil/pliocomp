@@ -5,8 +5,8 @@
 // ----- the use of type short.
 
 // Line list definitions (accessed as a short integer array).
-const OLL_NREF: usize = 0; // number of references
-const OLL_BLEN: usize = 1; // length of buffer containing LL
+// const OLL_NREF: usize = 0; // number of references (kept for reference to the original implementation)
+// const OLL_BLEN: usize = 1; // length of buffer containing LL (kept for reference to the original implementation)
 const OLL_LEN: usize = 2; // length of encoded line list
 const OLL_FIRST: usize = 3; // first data range entry in list
 
@@ -15,7 +15,7 @@ const OLL_FIRST: usize = 3; // first data range entry in list
 // ----- while retaining backwards compatibility.
 
 const LL_CURVERSION: i16 = -100; // LL version code (must be negative)
-                                 //const	LL_OLDFORMAT(a)	(a[LL_VERSION] > 0)
+//const	LL_OLDFORMAT(a)	(a[LL_VERSION] > 0)
 const LL_CURHDRLEN: i16 = 7;
 
 // Line list definitions (accessed as a short integer array).
@@ -24,8 +24,8 @@ const LL_HDRLEN: usize = 1; // length of encoded line list
 const LL_VERSION: usize = 2; // version number (negative)
 const LL_LENLO: usize = 3; // length of encoded line list
 const LL_LENHI: usize = 4; // length of encoded line list
-const LL_BLENLO: usize = 5; // length of LL buffer
-const LL_BLENHI: usize = 6; // length of LL buffer
+// const LL_BLENLO: usize = 5; // length of LL buffer (kept for reference to the original implementation)
+// const LL_BLENHI: usize = 6; // length of LL buffer (kept for reference to the original implementation)
 
 // Packed instruction decoding.
 const I_SHIFT: i32 = 4096;
@@ -192,9 +192,17 @@ pub fn pl_p2li(pxsrc: &[i32], xs: i32, lldst: &mut [i16], npix: usize) -> usize 
         pv = nv;
     }
 
+    // Store LL_LEN as the last written index (op - 1); the decoder iterates
+    // `llfirt..=lllen` inclusively over 0-based indices, so it wants the last
+    // index, not the count.
     lldst[3] = ((op - 1) % 32768) as i16;
     lldst[4] = ((op - 1) / 32768) as i16;
-    op - 1
+    // Return the total number of words in the line list (header + data). Unlike
+    // the original C (where `op` is 1-based so `op - 1` equals the count), here
+    // `op` is already 0-based and equals the count, so return `op`. The caller
+    // uses this as the number of shorts to write out; returning `op - 1` would
+    // drop the final word and truncate the encoded list.
+    op
 }
 
 /// Translate a PLIO line list into an integer pixel array.
@@ -269,10 +277,12 @@ pub fn pl_l2pi(ll_src: &[i16], xs: i32, px_dst: &mut [i32], npix: usize) -> usiz
                 if np > 0 {
                     otop = ((op as i32) + np - 1) as usize;
                     if opcode == I_HN {
+                        #[allow(clippy::needless_range_loop)]
                         for idx in op..=otop {
                             px_dst[idx] = pv;
                         }
                     } else {
+                        #[allow(clippy::needless_range_loop)]
                         for idx in op..=otop {
                             px_dst[idx] = 0;
                         }
@@ -323,17 +333,11 @@ pub fn pl_l2pi(ll_src: &[i16], xs: i32, px_dst: &mut [i32], npix: usize) -> usiz
         }
     }
 
+    #[allow(clippy::needless_range_loop)]
     for idx in op..npix {
         px_dst[idx] = 0;
     }
     npix
-}
-
-#[derive(Clone, Debug)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-pub struct Data {
-    pub d: Vec<i32>,
-    //pub bs: u8,
 }
 
 #[cfg(test)]
@@ -351,10 +355,18 @@ mod tests {
 
         println!("Compressed items: {res}");
 
+        // The returned length must cover the full encoded list (header + data),
+        // otherwise the caller writes out a truncated list.
+        assert!(res as usize <= compressed.len());
+
         let mut uncompressed: [i32; 10] = [0; 10];
 
-        let res2 = pl_l2pi(&compressed, xs, &mut uncompressed, npix);
+        let res2 = pl_l2pi(&compressed[..res as usize], xs, &mut uncompressed, npix);
 
         println!("Uncompressed items: {res2}");
+
+        // Round-trip must reproduce the original pixels exactly.
+        assert_eq!(res2, npix);
+        assert_eq!(&uncompressed[..npix], &input[..]);
     }
 }
