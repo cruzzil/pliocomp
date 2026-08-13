@@ -192,16 +192,17 @@ pub fn pl_p2li(pxsrc: &[i32], xs: i32, lldst: &mut [i16], npix: usize) -> usize 
         pv = nv;
     }
 
-    // Store LL_LEN as the last written index (op - 1); the decoder iterates
-    // `llfirt..=lllen` inclusively over 0-based indices, so it wants the last
-    // index, not the count.
-    lldst[3] = ((op - 1) % 32768) as i16;
-    lldst[4] = ((op - 1) / 32768) as i16;
-    // Return the total number of words in the line list (header + data). Unlike
-    // the original C (where `op` is 1-based so `op - 1` equals the count), here
-    // `op` is already 0-based and equals the count, so return `op`. The caller
-    // uses this as the number of shorts to write out; returning `op - 1` would
-    // drop the final word and truncate the encoded list.
+    // LL_LEN is the total number of words in the line list, header included --
+    // the same number this function returns.
+    //
+    // The original C is 1-based (it starts `op` at 8 and decrements `lldst` on
+    // entry), so there `op - 1` is simultaneously the word count and the
+    // 1-based index of the last word, and it stores and returns that.  Here
+    // `op` is 0-based, so the count is `op` itself: storing `op - 1` would put
+    // a length one short of the truth on the wire, which a conforming decoder
+    // reads as one instruction fewer than was written.
+    lldst[LL_LENLO] = (op % 32768) as i16;
+    lldst[LL_LENHI] = (op / 32768) as i16;
     op
 }
 
@@ -236,9 +237,15 @@ pub fn pl_l2pi(ll_src: &[i16], xs: i32, px_dst: &mut [i32], npix: usize) -> usiz
     //--ll_src;
 
     // Support old format line lists.
+    //
+    // `lllen` is a word *count* and `llfirt` the 0-based index of the first
+    // data word, so the scan below runs over `llfirt..lllen` -- exclusive.
+    // The C reaches the same words with an inclusive loop because it is
+    // 1-based throughout (`for (ip = llfirt; ip <= lllen; ++ip)` with
+    // `--ll_src`, `llfirt = ll_src[2] + 1`).
     if ll_src[LL_VERSION] > 0 {
         lllen = ll_src[OLL_LEN] as i32;
-        llfirt = (OLL_FIRST as i32) - 1;
+        llfirt = OLL_FIRST as i32;
     } else {
         lllen = ((ll_src[LL_LENHI] as i32) << 15) + ll_src[LL_LENLO] as i32; // LL_LEN
         llfirt = (ll_src[LL_HDRLEN]) as i32; // LL_FIRST
@@ -255,7 +262,7 @@ pub fn pl_l2pi(ll_src: &[i16], xs: i32, px_dst: &mut [i32], npix: usize) -> usiz
     let mut x1: i32 = 1;
     let mut pv: i32 = 1;
 
-    for ip in llfirt..=lllen {
+    for ip in llfirt..lllen {
         if skipwd {
             skipwd = false;
             continue;
@@ -347,6 +354,23 @@ pub fn pl_l2pi(ll_src: &[i16], xs: i32, px_dst: &mut [i32], npix: usize) -> usiz
 mod tests {
     use super::*;
 
+    /// Encode `input` and return the line list, trimmed to the returned length.
+    fn encode(input: &[i32]) -> Vec<i16> {
+        let mut ll = vec![0i16; input.len() * 5 + 64];
+        let n = pl_p2li(input, 0, &mut ll, input.len());
+        ll.truncate(n);
+        ll
+    }
+
+    /// Encode `input` and decode it again.
+    fn round_trip(input: &[i32]) -> Vec<i32> {
+        let ll = encode(input);
+        let mut out = vec![0i32; input.len()];
+        let n = pl_l2pi(&ll, 0, &mut out, input.len());
+        assert_eq!(n, input.len());
+        out
+    }
+
     #[test]
     fn it_works() {
         let input: [i32; 9] = [3, 56, 3343, 22225, 3, 66, 3, 3, 3];
@@ -360,16 +384,179 @@ mod tests {
 
         // The returned length must cover the full encoded list (header + data),
         // otherwise the caller writes out a truncated list.
-        assert!(res as usize <= compressed.len());
+        assert!(res <= compressed.len());
 
         let mut uncompressed: [i32; 10] = [0; 10];
 
-        let res2 = pl_l2pi(&compressed[..res as usize], xs, &mut uncompressed, npix);
+        let res2 = pl_l2pi(&compressed[..res], xs, &mut uncompressed, npix);
 
         println!("Uncompressed items: {res2}");
 
         // Round-trip must reproduce the original pixels exactly.
         assert_eq!(res2, npix);
         assert_eq!(&uncompressed[..npix], &input[..]);
+    }
+
+    /// `LL_LEN` is the total word count of the line list, header included --
+    /// the same number `pl_p2li` returns.
+    ///
+    /// Storing it as the *last index* instead (one less) produces a line list
+    /// that this crate could still read but no conforming PLIO decoder could:
+    /// CFITSIO drops the final instruction and reconstructs the tail of the
+    /// row wrongly.  See the CHANGELOG entry for 0.5.0.
+    #[test]
+    fn ll_len_header_is_the_word_count() {
+        for input in [
+            vec![7],
+            vec![3, 56, 3343, 22225, 3, 66, 3, 3, 3],
+            vec![0, 0, 0, 5, 5, 0, 9, 0],
+            (0..500).map(|i| (i * 37) % 4096).collect::<Vec<i32>>(),
+        ] {
+            let ll = encode(&input);
+            let ll_len = ((ll[LL_LENHI] as i32) << 15) + ll[LL_LENLO] as i32;
+            assert_eq!(
+                ll_len as usize,
+                ll.len(),
+                "LL_LEN must equal the number of words written, for {:?}...",
+                &input[..input.len().min(6)]
+            );
+            assert_eq!(ll[LL_HDRLEN], LL_CURHDRLEN);
+            assert_eq!(ll[LL_VERSION], LL_CURVERSION);
+        }
+    }
+
+    /// Word-for-word against the reference C (`c_example/pliocomp.c`, itself
+    /// f2c'd from IRAF's `plp2l.gx` and the copy CFITSIO ships).  These pin
+    /// the on-disk format independently of our own decoder, which is the only
+    /// way a self-consistent but non-conforming encoding gets caught.
+    #[test]
+    fn encoding_matches_the_reference_c() {
+        // (pixels, expected line list)
+        let cases: &[(&[i32], &[i16])] = &[
+            (&[7], &[0, 7, -100, 8, 0, 0, 0, 24582]),
+            (&[1, 2, 3], &[0, 7, -100, 10, 0, 0, 0, 16385, 24577, 24577]),
+            (
+                &[0, 0, 0, 5, 5, 0, 9, 0],
+                &[0, 7, -100, 13, 0, 0, 0, 8196, 3, 16386, 8196, 20482, 1],
+            ),
+            (
+                &[3, 56, 3343, 22225, 3, 66, 3, 3, 3],
+                &[
+                    0, 7, -100, 19, 0, 0, 0, 24578, 24629, 27863, 5841, 5, 16385, 4099, 0, 16385,
+                    24639, 12351, 16387,
+                ],
+            ),
+        ];
+
+        for (input, expected) in cases {
+            assert_eq!(&encode(input)[..], *expected, "encoding of {input:?}");
+        }
+    }
+
+    /// The same vectors read back, so the decoder is pinned against the
+    /// reference too and not merely against our own encoder.
+    #[test]
+    fn decoding_matches_the_reference_c() {
+        let cases: &[(&[i16], &[i32])] = &[
+            (&[0, 7, -100, 8, 0, 0, 0, 24582], &[7]),
+            (&[0, 7, -100, 10, 0, 0, 0, 16385, 24577, 24577], &[1, 2, 3]),
+            (
+                &[0, 7, -100, 13, 0, 0, 0, 8196, 3, 16386, 8196, 20482, 1],
+                &[0, 0, 0, 5, 5, 0, 9, 0],
+            ),
+            (
+                &[
+                    0, 7, -100, 19, 0, 0, 0, 24578, 24629, 27863, 5841, 5, 16385, 4099, 0, 16385,
+                    24639, 12351, 16387,
+                ],
+                &[3, 56, 3343, 22225, 3, 66, 3, 3, 3],
+            ),
+        ];
+
+        for (ll, expected) in cases {
+            let mut out = vec![0i32; expected.len()];
+            let n = pl_l2pi(ll, 0, &mut out, expected.len());
+            assert_eq!(n, expected.len());
+            assert_eq!(&out[..], *expected, "decoding of {ll:?}");
+        }
+    }
+
+    /// A zero run is emitted in chunks of at most `I_DATAMAX - 1`, not
+    /// `I_DATAMAX`, so that the `+ M_PN + 1` conversion below it cannot carry
+    /// out of the data field and into the opcode.
+    ///
+    /// This is where we deliberately differ from the copy of `pliocomp.c` in
+    /// CFITSIO, which chunks at `I_DATAMAX` and, for exactly 4095 zeros
+    /// followed by one non-zero pixel, emits 24576 -- opcode `I_IS` rather
+    /// than `I_PN` -- and reconstructs the row completely wrongly.  IRAF's
+    /// `plp2l.gx` has the `-1`; the f2c'd version lost it.
+    #[test]
+    fn long_zero_runs_do_not_overflow_the_opcode_field() {
+        for n in [4093usize, 4094, 4095, 4096, 8190, 12000] {
+            let mut input = vec![0i32; n];
+            input.push(5);
+            let out = round_trip(&input);
+            assert_eq!(
+                out, input,
+                "{n} zeros followed by a pixel did not round trip"
+            );
+
+            // and no data word may be mistaken for a different instruction
+            for w in &encode(&input)[LL_CURHDRLEN as usize..] {
+                let opcode = (*w as i32) / 4096;
+                assert!(
+                    matches!(
+                        opcode,
+                        I_ZN | I_HN | I_PN | I_SH | I_IH | I_DH | I_IS | I_DS
+                    ),
+                    "word {w} decodes to unknown opcode {opcode}"
+                );
+            }
+        }
+    }
+
+    /// The shapes the encoder branches on: constant runs, isolated pixels,
+    /// values needing the two-word `I_SH` form, and the empty input.
+    #[test]
+    fn round_trips() {
+        let cases: Vec<Vec<i32>> = vec![
+            vec![],
+            vec![0],
+            vec![1],
+            vec![32767],
+            vec![0, 0, 0, 0],
+            vec![5; 40],
+            vec![0; 40],
+            vec![1, 0, 1, 0, 1, 0, 1, 0],
+            vec![4095, 4096, 4097],
+            vec![32767, 0, 32767],
+            vec![0; 20]
+                .into_iter()
+                .chain([9])
+                .chain(vec![0; 20])
+                .collect(),
+            (0..1000).map(|i| (i * 7919) % 32768).collect(),
+            (0..1000)
+                .map(|i| if i % 3 == 0 { 0 } else { 12345 })
+                .collect(),
+        ];
+
+        for input in cases {
+            if input.is_empty() {
+                let mut ll = [0i16; 32];
+                assert_eq!(
+                    pl_p2li(&input, 0, &mut ll, 0),
+                    0,
+                    "empty input encodes to nothing"
+                );
+                continue;
+            }
+            assert_eq!(
+                round_trip(&input),
+                input,
+                "round trip of {} pixels",
+                input.len()
+            );
+        }
     }
 }

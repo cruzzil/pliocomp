@@ -47,6 +47,10 @@ old header layout.
 | 5 | `LL_BLENLO` | buffer length, low half |
 | 6 | `LL_BLENHI` | buffer length, high half |
 
+`LL_LEN` (the `LENLO`/`LENHI` pair) is the **total word count of the list, header included** —
+the number `pl_p2li` returns — not the index of the last word. The decoder therefore scans
+`LL_HDRLEN..LL_LEN` exclusively; the 1-based C reaches the same words with an inclusive loop.
+
 The length is split into lo/hi halves because a single `i16` cannot hold lengths above 32767.
 
 ### Instruction encoding
@@ -138,7 +142,11 @@ to keep in mind (they are also the source of most round-trip surprises):
    constant runs. Worst-case input (a distinct value at every pixel) produces roughly two
    instruction words per pixel, i.e. it *expands*.
 4. **Per-instruction run length ≤ 4095.** The 12-bit data field caps a single instruction;
-   longer runs cost proportionally more words (handled transparently by the encoder).
+   longer runs cost proportionally more words (handled transparently by the encoder). Zero runs
+   are chunked at `I_DATAMAX - 1`, as in IRAF's `plp2l.gx`, so the later `+ M_PN + 1`
+   conversion cannot carry out of the data field. CFITSIO's f2c'd copy chunks at `I_DATAMAX`
+   and so mis-encodes exactly 4095 zeros followed by a non-zero pixel; our line lists differ
+   from its for zero runs ≥ 4094.
 5. **Signedness / overflow of intermediate math.** The high-value deltas (`I_IH`/`I_DH`) are
    themselves limited to `±I_DATAMAX` per step, and large absolute jumps must go through
    `I_SH`, which inherits limitation (2).

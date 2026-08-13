@@ -5,6 +5,29 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0]
+
+### Fixed
+
+- `pl_p2li`: write `LL_LEN` as the total word count of the line list, not the
+  index of its last word. 0.3.0 fixed the *returned* length but left the length
+  *stored in the header* one short, and `pl_l2pi` was made to scan inclusively
+  to compensate, so encoder and decoder agreed with each other but not with the
+  format. Line lists were therefore unreadable by CFITSIO (which drops the
+  final instruction) and vice versa. `pl_l2pi` now scans `LL_HDRLEN..LL_LEN`
+  exclusively, and the old-format branch starts at `OLL_FIRST` rather than
+  `OLL_FIRST - 1`. New tests pin both directions against the reference C in
+  [`c_example/`](c_example/), which a round-trip-only suite cannot catch.
+
+### Changed
+
+- Line lists written by 0.3.x and 0.4.x carry an `LL_LEN` one word short and
+  need re-encoding; a 0.5.0 decoder drops their final instruction.
+- [ALGORITHM.md](ALGORITHM.md) now documents that `LL_LEN` is a count, and that
+  zero runs are chunked at `I_DATAMAX - 1` as in IRAF's `plp2l.gx` — CFITSIO's
+  f2c'd copy chunks at `I_DATAMAX` and mis-encodes exactly 4095 zeros followed
+  by a non-zero pixel.
+
 ## [0.4.0]
 
 ### Fixed
