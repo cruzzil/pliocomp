@@ -23,11 +23,13 @@ fuzz_target!(|data: Data| {
     let xs = 0;
     let npix = input.len();
 
-    // Size the output generously: worst-case (a distinct value at every pixel)
-    // costs a few instruction words per pixel, so this cannot overflow.
-    let mut compressed: Vec<i16> = vec![0; npix * 5 + 32];
+    // Size the output at exactly the encoder's worst case -- no slack. Any
+    // input that needs more than `pl_p2li_max_len` words makes `pl_p2li` return
+    // None and trips the expect below, so a regression in that bound is a fuzz
+    // failure rather than something a generous buffer papers over.
+    let mut compressed: Vec<i16> = vec![0; pl_p2li_max_len(npix)];
 
-    let res = pl_p2li(&input, xs, &mut compressed, npix);
+    let res = pl_p2li(&input, xs, &mut compressed, npix).expect("pl_p2li_max_len must suffice");
 
     let mut uncompressed: Vec<i32> = vec![0; npix];
 
