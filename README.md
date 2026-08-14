@@ -28,18 +28,20 @@ The crate exposes a single pair of inverse functions — a lossless codec:
 
 | Function | Direction | Meaning |
 |----------|-----------|---------|
-| `pl_p2li(pxsrc, xs, lldst, npix) -> usize` | pixels → line list | **encode** ("pixel to line list"), returns the list length |
+| `pl_p2li(pxsrc, xs, lldst, npix) -> Option<usize>` | pixels → line list | **encode** ("pixel to line list"), returns the list length, or `None` if `lldst` was too small |
 | `pl_l2pi(ll_src, xs, px_dst, npix) -> usize` | line list → pixels | **decode** ("line list to pixel"), returns the pixel count |
+| `pl_p2li_max_len(npix) -> usize` | — | worst-case line-list length for `npix` pixels; size the encode buffer with this and `pl_p2li` cannot fail |
 
 ```rust
-use pliocomp::{pl_p2li, pl_l2pi};
+use pliocomp::{pl_p2li, pl_p2li_max_len, pl_l2pi};
 
 // A mask line: mostly zero with a short run of a constant high value.
 let pixels: Vec<i32> = vec![0, 0, 0, 5, 5, 5, 0, 0];
 
-// Encode into a caller-sized line-list buffer (i16 words).
-let mut line_list = vec![0i16; pixels.len() * 2 + 8];
-let ll_len = pl_p2li(&pixels, 0, &mut line_list, pixels.len());
+// Encode into a caller-sized line-list buffer (i16 words). Sizing it with
+// `pl_p2li_max_len` means the encode can never run out of room.
+let mut line_list = vec![0i16; pl_p2li_max_len(pixels.len())];
+let ll_len = pl_p2li(&pixels, 0, &mut line_list, pixels.len()).unwrap();
 
 // Decode back into a pixel buffer.
 let mut decoded = vec![0i32; pixels.len()];
@@ -52,6 +54,21 @@ assert_eq!(&decoded[..n], &pixels[..]);
 supports clipping to a sub-range `[xs, xs+npix)` so a caller can expand part of a line
 without materializing the whole thing. The caller passes a pre-sized output buffer, and
 the returned length reports how much was actually written.
+
+### Sizing the encode buffer
+
+`pl_p2li` writes at most **three `i16` words per pixel plus a seven-word header** — a pixel
+whose value differs from the running high value by more than 4095 costs a two-word `I_SH`
+pair *and* a one-word `I_HN`. `pl_p2li_max_len(npix)` returns that bound; allocate it and
+the encode always succeeds. Smaller buffers are fine too — space is checked as the list is
+built, so anything that genuinely fits still encodes — but `pl_p2li` returns `None` rather
+than panicking when it runs out.
+
+> **Note:** this README recommended `npix * 2 + 8` words before **0.6.0**. Two words per
+> pixel is *not* enough: from two pixels up, worst-case data overruns it. That is the same
+> undersizing CFITSIO fixed in [PR #174](https://github.com/heasarc/cfitsio/pull/174),
+> where it was a heap buffer overflow; here the slice bounds turned it into a panic
+> instead. If you sized a buffer from the old formula, switch to `pl_p2li_max_len`.
 
 ### Round-trip caveats
 

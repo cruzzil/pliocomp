@@ -51,6 +51,32 @@ const M_PN: i32 = 20480;
 // The following bit is set if the instruction changes the current position.
 const M_MOVE: i16 = 16384;
 
+/// Maximum number of `i16` words [`pl_p2li`] can write when encoding `npix` pixels.
+///
+/// A destination buffer of at least this length can never be too small, so
+/// [`pl_p2li`] cannot return `None` for it.
+///
+/// The bound is three words per pixel plus the seven-word header. Three is the
+/// worst case and is reached: a single pixel whose value differs from the
+/// running high value by more than `I_DATAMAX` costs a two-word `I_SH` pair plus
+/// a one-word `I_HN`. More precisely, a range of `np` non-zero pixels preceded
+/// by `nz` zeros costs at most `2 + ceil(nz / (I_DATAMAX - 1)) + ceil(np /
+/// I_DATAMAX) <= 2 + nz + np` words for `nz + np` pixels, which is at most three
+/// per pixel and is tight at `nz == 0, np == 1`.
+///
+/// This mirrors the `(3 * nx + 7) * sizeof(short)` sizing CFITSIO adopted in
+/// <https://github.com/heasarc/cfitsio/pull/174>. Note that two words per pixel
+/// -- the old CFITSIO figure, and the one this crate's README suggested before
+/// 0.6.0 -- is *not* enough for any input of two pixels or more.
+pub fn pl_p2li_max_len(npix: usize) -> usize {
+    3 * npix + LL_CURHDRLEN as usize
+}
+
+/// Is there room for `n` more words at `op`?
+fn room(lldst: &[i16], op: usize, n: usize) -> bool {
+    lldst.len() >= op + n
+}
+
 /// Convert a pixel array to a line list.
 ///
 /// Arguments
@@ -62,8 +88,12 @@ const M_MOVE: i16 = 16384;
 ///
 /// Returns
 ///
-/// * The length of the list is returned as the function value
-pub fn pl_p2li(pxsrc: &[i32], xs: i32, lldst: &mut [i16], npix: usize) -> usize {
+/// * `Some(len)`, the length of the list, or `None` if `lldst` was too small to
+///   hold the encoding. The space is checked as the list is built, so a buffer
+///   shorter than [`pl_p2li_max_len`] still succeeds whenever the data actually
+///   fits; size at `pl_p2li_max_len(npix)` to rule `None` out entirely. On
+///   `None` the contents of `lldst` are unspecified.
+pub fn pl_p2li(pxsrc: &[i32], xs: i32, lldst: &mut [i16], npix: usize) -> Option<usize> {
     let mut v;
 
     let mut dv: i32;
@@ -79,10 +109,13 @@ pub fn pl_p2li(pxsrc: &[i32], xs: i32, lldst: &mut [i16], npix: usize) -> usize 
 
     // No input pixels?
     if npix == 0 {
-        return 0;
+        return Some(0);
     }
 
     // Initialize the linelist header.
+    if !room(lldst, 0, LL_CURHDRLEN as usize) {
+        return None;
+    }
     lldst[LL_VERSION] = LL_CURVERSION;
     lldst[LL_HDRLEN] = LL_CURHDRLEN;
     lldst[LL_NREFS] = 0;
@@ -138,11 +171,17 @@ pub fn pl_p2li(pxsrc: &[i32], xs: i32, lldst: &mut [i16], npix: usize) -> usize 
                 // Output IH or DH instruction?
                 hi = pv;
                 if dv.abs() > I_DATAMAX {
+                    if !room(lldst, op, 2) {
+                        return None;
+                    }
                     lldst[op] = ((pv & I_DATAMAX) + M_SH) as i16;
                     op += 1;
                     lldst[op] = (pv / I_SHIFT) as i16;
                     op += 1;
                 } else {
+                    if !room(lldst, op, 1) {
+                        return None;
+                    }
                     if dv < 0 {
                         lldst[op] = (-dv + M_DH) as i16;
                     } else {
@@ -167,6 +206,9 @@ pub fn pl_p2li(pxsrc: &[i32], xs: i32, lldst: &mut [i16], npix: usize) -> usize 
         if nz > 0 {
             // Output the ZN instruction.
             while nz > 0 {
+                if !room(lldst, op, 1) {
+                    return None;
+                }
                 lldst[op] = i32::min(I_DATAMAX - 1, nz) as i16;
                 op += 1;
                 nz -= I_DATAMAX - 1
@@ -181,6 +223,9 @@ pub fn pl_p2li(pxsrc: &[i32], xs: i32, lldst: &mut [i16], npix: usize) -> usize 
 
         // The only thing left is the HN instruction if we get here.
         while np > 0 {
+            if !room(lldst, op, 1) {
+                return None;
+            }
             lldst[op] = (i32::min(I_DATAMAX, np) + M_HN) as i16;
             op += 1;
             np -= I_DATAMAX;
@@ -203,7 +248,7 @@ pub fn pl_p2li(pxsrc: &[i32], xs: i32, lldst: &mut [i16], npix: usize) -> usize 
     // reads as one instruction fewer than was written.
     lldst[LL_LENLO] = (op % 32768) as i16;
     lldst[LL_LENHI] = (op / 32768) as i16;
-    op
+    Some(op)
 }
 
 /// Translate a PLIO line list into an integer pixel array.
@@ -356,10 +401,24 @@ mod tests {
 
     /// Encode `input` and return the line list, trimmed to the returned length.
     fn encode(input: &[i32]) -> Vec<i16> {
-        let mut ll = vec![0i16; input.len() * 5 + 64];
-        let n = pl_p2li(input, 0, &mut ll, input.len());
+        let mut ll = vec![0i16; pl_p2li_max_len(input.len())];
+        let n = pl_p2li(input, 0, &mut ll, input.len())
+            .expect("a pl_p2li_max_len buffer is always big enough");
         ll.truncate(n);
         ll
+    }
+
+    /// The worst-case input shape: every pixel differs from the previous high
+    /// value by more than `I_DATAMAX`, so each one costs a two-word `I_SH` pair
+    /// plus a one-word `I_HN` -- three words per pixel, the bound
+    /// `pl_p2li_max_len` is built on.
+    ///
+    /// It has to start at 5000 rather than 1: `hi` starts at 1, so a leading 1
+    /// needs no high-value change and would cost a single word.
+    fn worst_case(npix: usize) -> Vec<i32> {
+        (0..npix)
+            .map(|i| if i % 2 == 0 { 5000 } else { 1 })
+            .collect()
     }
 
     /// Encode `input` and decode it again.
@@ -378,7 +437,7 @@ mod tests {
         let mut compressed: [i16; 200] = [0; 200];
         let npix = 9;
 
-        let res = pl_p2li(&input, xs, &mut compressed, npix);
+        let res = pl_p2li(&input, xs, &mut compressed, npix).unwrap();
 
         println!("Compressed items: {res}");
 
@@ -515,6 +574,78 @@ mod tests {
         }
     }
 
+    /// `pl_p2li_max_len` really does bound the encoder, for the input shape that
+    /// costs the most words per pixel.
+    ///
+    /// This is the Rust counterpart of the sizing bug fixed in CFITSIO PR #174
+    /// (<https://github.com/heasarc/cfitsio/pull/174>): there the output buffer
+    /// was allocated at two words per pixel, and `pl_p2li` wrote past the end of
+    /// it -- a heap overflow -- for every size from 1 to 300 pixels. Here the
+    /// same undersizing is caught by the slice bounds instead, but the formula
+    /// has to be right either way, so this walks the same range the PR did.
+    #[test]
+    fn encode_fits_in_max_len() {
+        for npix in 1..=300usize {
+            let input = worst_case(npix);
+            let max = pl_p2li_max_len(npix);
+
+            let mut ll = vec![0i16; max];
+            let n = pl_p2li(&input, 0, &mut ll, npix)
+                .unwrap_or_else(|| panic!("{npix} pixels did not fit in pl_p2li_max_len({npix})"));
+
+            // This shape costs the full three words per pixel, so the bound is
+            // not merely respected here, it is reached.
+            assert_eq!(n, max, "{npix} pixels wrote {n} words, bound is {max}");
+
+            let mut out = vec![0i32; npix];
+            assert_eq!(pl_l2pi(&ll[..n], 0, &mut out, npix), npix);
+            assert_eq!(out, input, "worst-case {npix} pixels did not round trip");
+        }
+    }
+
+    /// The bound is tight, not merely safe: one pixel needing the two-word
+    /// `I_SH` form reaches `3 * 1 + 7` words exactly.
+    #[test]
+    fn max_len_is_tight() {
+        let mut ll = [0i16; 10];
+        assert_eq!(pl_p2li_max_len(1), 10);
+        assert_eq!(pl_p2li(&[5000], 0, &mut ll, 1), Some(10));
+    }
+
+    /// An undersized buffer is reported, not written past.
+    #[test]
+    fn undersized_buffer_returns_none() {
+        // One word short of what this input actually needs.
+        let input = worst_case(50);
+        let needed = encode(&input).len();
+        let mut ll = vec![0i16; needed - 1];
+        assert_eq!(pl_p2li(&input, 0, &mut ll, input.len()), None);
+
+        // And nothing at all to write the header into.
+        let mut tiny = [0i16; LL_CURHDRLEN as usize - 1];
+        assert_eq!(pl_p2li(&[1], 0, &mut tiny, 1), None);
+    }
+
+    /// Two words per pixel -- CFITSIO's pre-#174 figure, and what this crate's
+    /// README suggested before 0.6.0 -- is too small from two pixels up.
+    #[test]
+    fn two_words_per_pixel_is_not_enough() {
+        for npix in 2..=300usize {
+            let input = worst_case(npix);
+            let mut ll = vec![0i16; npix * 2 + 8];
+            assert_eq!(
+                pl_p2li(&input, 0, &mut ll, npix),
+                None,
+                "{npix} pixels should not fit in the old 2-words-per-pixel buffer"
+            );
+        }
+
+        // One pixel is the only size the old formula covered: 13 words needed
+        // against the 12 it supplied, at the smallest failing size.
+        assert_eq!(pl_p2li_max_len(2), 13);
+        assert_eq!(pl_p2li(&worst_case(1), 0, &mut [0i16; 10], 1), Some(10));
+    }
+
     /// The shapes the encoder branches on: constant runs, isolated pixels,
     /// values needing the two-word `I_SH` form, and the empty input.
     #[test]
@@ -546,7 +677,7 @@ mod tests {
                 let mut ll = [0i16; 32];
                 assert_eq!(
                     pl_p2li(&input, 0, &mut ll, 0),
-                    0,
+                    Some(0),
                     "empty input encodes to nothing"
                 );
                 continue;

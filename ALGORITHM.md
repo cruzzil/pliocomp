@@ -109,6 +109,9 @@ surrounding context allows it (see the `np == 1` special cases in `pl_p2li`).
    12-bit field).
 5. The length words (indices 3/4) are back-patched, and the total word count is returned.
 
+Space in the destination is checked before each group of words is written, so an
+undersized buffer yields `None` instead of a panic; see limitation 3 for the bound.
+
 ## How the decoder works (`pl_l2pi`)
 
 The decoder keeps two counters: `pv` (current high value, starts at 1) and a line position
@@ -139,8 +142,21 @@ to keep in mind (they are also the source of most round-trip surprises):
    overflows the `i16` and the round-trip is silently wrong. Larger inputs are *not* rejected —
    they are silently truncated.
 3. **Piecewise-constant assumption.** Compression only helps when data consists of long
-   constant runs. Worst-case input (a distinct value at every pixel) produces roughly two
-   instruction words per pixel, i.e. it *expands*.
+   constant runs. Worst-case input — every pixel differing from the running high value by
+   more than `I_DATAMAX`, e.g. alternating 1 and 5000 — costs **three** instruction words
+   per pixel, i.e. it *expands*: a two-word `I_SH` pair to reset the high value plus a
+   one-word `I_HN` to emit the pixel. A range of `np` non-zero pixels preceded by `nz`
+   zeros costs at most `2 + ceil(nz / (I_DATAMAX - 1)) + ceil(np / I_DATAMAX) <= 2 + nz +
+   np` words, which is at most three per pixel and tight at `nz == 0, np == 1`. With the
+   7-word header that gives `3 * npix + 7` as the exact worst-case line-list length —
+   what `pl_p2li_max_len` returns, and what an encode buffer should be sized at.
+
+   Two words per pixel, which this document claimed before 0.6.0, is **wrong**: CFITSIO
+   allocated its PLIO buffer that way and overran the heap for every tile from 1 to 300
+   pixels (fixed in [PR #174](https://github.com/heasarc/cfitsio/pull/174) by switching to
+   `(3 * nx + 7) * sizeof(short)`). In this crate the same undersizing hit a slice bounds
+   check instead, so it was a panic rather than memory corruption; `pl_p2li` now returns
+   `None` for it.
 4. **Per-instruction run length ≤ 4095.** The 12-bit data field caps a single instruction;
    longer runs cost proportionally more words (handled transparently by the encoder). Zero runs
    are chunked at `I_DATAMAX - 1`, as in IRAF's `plp2l.gx`, so the later `+ M_PN + 1`

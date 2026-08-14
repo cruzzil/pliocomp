@@ -5,6 +5,52 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0]
+
+### Fixed
+
+- Corrected the documented worst-case size of an encoded line list from two
+  `i16` words per pixel to **three, plus the seven-word header** (`3 * npix + 7`).
+  A pixel differing from the running high value by more than `I_DATAMAX` costs a
+  two-word `I_SH` pair *and* a one-word `I_HN`. The `npix * 2 + 8` buffer
+  [README.md](README.md) recommended is too small from two pixels up, so a
+  caller who followed it panicked on high-dynamic-range input.
+
+  This is the same undersizing CFITSIO fixed in
+  [PR #174](https://github.com/heasarc/cfitsio/pull/174), where `pl_p2li` wrote
+  past a buffer allocated at `nx * sizeof(int)` — a heap overflow for every tile
+  from 1 to 300 pixels. Here `lldst` is a bounds-checked slice, so the same bug
+  was a panic and never memory corruption. The in-tree tests and fuzz target
+  oversized their buffers, which is why fuzzing never surfaced it.
+
+### Added
+
+- `pl_p2li_max_len(npix) -> usize`, the counterpart of CFITSIO's
+  `imcomp_calc_max_elem`: the worst-case word count for `npix` pixels. Size an
+  encode buffer with it and `pl_p2li` cannot fail.
+
+### Changed
+
+- **Breaking:** `pl_p2li` now returns `Option<usize>` rather than `usize`, and
+  returns `None` when `lldst` is too small instead of panicking — the Rust
+  equivalent of the `dstlen` parameter and `-1` return added by CFITSIO #174.
+  Space is checked incrementally as the list is built, so a buffer smaller than
+  `pl_p2li_max_len` still succeeds whenever the data actually fits. Callers
+  update with `.unwrap()` (safe when the buffer is `pl_p2li_max_len` words) or
+  by handling `None`.
+- No emitted word changed; the on-disk format is unaffected, as the
+  reference-C tests pin.
+- The fuzz target now sizes its buffer at exactly `pl_p2li_max_len(npix)`, so a
+  future regression in the bound fails the fuzzer instead of being hidden by
+  slack.
+
+### Known issues
+
+- `pl_l2pi` can still panic on a malformed or truncated line list — a list that
+  ends mid-`I_SH` makes it read one word past the end. CFITSIO #174 is
+  encoder-side only; hardening the decoder against untrusted input is tracked
+  separately.
+
 ## [0.5.0]
 
 ### Fixed
