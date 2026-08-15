@@ -33,7 +33,8 @@ fuzz_target!(|data: Data| {
 
     let mut uncompressed: Vec<i32> = vec![0; npix];
 
-    let _res2 = pl_l2pi(&compressed[..res], xs, &mut uncompressed, npix);
+    let _res2 = pl_l2pi(&compressed[..res], xs, &mut uncompressed, npix)
+        .expect("a list this crate encoded must decode");
 
     assert_eq!(input, uncompressed);
 });

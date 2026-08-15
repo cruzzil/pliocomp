@@ -21,7 +21,7 @@ The crate exposes the codec as a pair of inverse functions in [src/lib.rs](src/l
 | Function | Direction | Meaning |
 |----------|-----------|---------|
 | `pl_p2li(pxsrc, xs, lldst, npix)` | pixels → line list | **encode** ("pixel to line list") |
-| `pl_l2pi(ll_src, xs, px_dst, npix)` | line list → pixels | **decode** ("line list to pixel") |
+| `pl_l2pi(ll_src, xs, px_dst, npix)` | line list → pixels | **decode** ("line list to pixel"), `None` on a truncated source |
 
 A "line list" (LL) is the compressed form of one 1-D line of `npix` pixels.
 
