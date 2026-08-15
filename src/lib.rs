@@ -262,8 +262,11 @@ pub fn pl_p2li(pxsrc: &[i32], xs: i32, lldst: &mut [i16], npix: usize) -> Option
 ///
 /// Returns
 ///
-/// * The number of pixels output (always npix) is returned as the function value.
-pub fn pl_l2pi(ll_src: &[i16], xs: i32, px_dst: &mut [i32], npix: usize) -> usize {
+/// * The number of pixels output (always npix), or `None` if `ll_src` is too
+///   short for the line list its header declares. The length recorded in the
+///   header is not otherwise validated, so a truncated or corrupt list would
+///   read past the end of `ll_src`.
+pub fn pl_l2pi(ll_src: &[i16], xs: i32, px_dst: &mut [i32], npix: usize) -> Option<usize> {
     let mut data;
     let mut otop: usize;
     let lllen: i32;
@@ -288,17 +291,24 @@ pub fn pl_l2pi(ll_src: &[i16], xs: i32, px_dst: &mut [i32], npix: usize) -> usiz
     // The C reaches the same words with an inclusive loop because it is
     // 1-based throughout (`for (ip = llfirt; ip <= lllen; ++ip)` with
     // `--ll_src`, `llfirt = ll_src[2] + 1`).
+    if ll_src.len() <= LL_VERSION {
+        return None; // too short to hold even a version
+    }
+
     if ll_src[LL_VERSION] > 0 {
         lllen = ll_src[OLL_LEN] as i32;
         llfirt = OLL_FIRST as i32;
     } else {
+        if ll_src.len() <= LL_LENHI {
+            return None;
+        }
         lllen = ((ll_src[LL_LENHI] as i32) << 15) + ll_src[LL_LENLO] as i32; // LL_LEN
         llfirt = (ll_src[LL_HDRLEN]) as i32; // LL_FIRST
     }
 
     // No pixels?
     if npix == 0 || lllen <= 0 {
-        return 0;
+        return Some(0);
     }
 
     let xe: i32 = xs + (npix as i32);
@@ -311,6 +321,12 @@ pub fn pl_l2pi(ll_src: &[i16], xs: i32, px_dst: &mut [i32], npix: usize) -> usiz
         if skipwd {
             skipwd = false;
             continue;
+        }
+
+        // `lllen` comes from the list's own header, so it can run past the end
+        // of the source we were given.
+        if ip < 0 || ip as usize >= ll_src.len() {
+            return None;
         }
 
         opcode = (ll_src[ip as usize] / 4096) as i32; // I_OPCODE
@@ -349,6 +365,12 @@ pub fn pl_l2pi(ll_src: &[i16], xs: i32, px_dst: &mut [i32], npix: usize) -> usiz
                 x1 = x2 + 1;
             }
             I_SH => {
+                // A set-high-value spans two words, so the second one can fall
+                // past the end of the source.
+                if (ip + 1) as usize >= ll_src.len() {
+                    return None;
+                }
+
                 // Widen to i32 *before* shifting: the high word can be >= 8,
                 // which would overflow the i16 when shifted left by 12 and
                 // corrupt the reconstructed pixel value.
@@ -392,7 +414,7 @@ pub fn pl_l2pi(ll_src: &[i16], xs: i32, px_dst: &mut [i32], npix: usize) -> usiz
     for idx in op..npix {
         px_dst[idx] = 0;
     }
-    npix
+    Some(npix)
 }
 
 #[cfg(test)]
@@ -425,7 +447,7 @@ mod tests {
     fn round_trip(input: &[i32]) -> Vec<i32> {
         let ll = encode(input);
         let mut out = vec![0i32; input.len()];
-        let n = pl_l2pi(&ll, 0, &mut out, input.len());
+        let n = pl_l2pi(&ll, 0, &mut out, input.len()).expect("list fits in the source");
         assert_eq!(n, input.len());
         out
     }
@@ -447,7 +469,8 @@ mod tests {
 
         let mut uncompressed: [i32; 10] = [0; 10];
 
-        let res2 = pl_l2pi(&compressed[..res], xs, &mut uncompressed, npix);
+        let res2 = pl_l2pi(&compressed[..res], xs, &mut uncompressed, npix)
+            .expect("list fits in the source");
 
         println!("Uncompressed items: {res2}");
 
@@ -534,7 +557,7 @@ mod tests {
 
         for (ll, expected) in cases {
             let mut out = vec![0i32; expected.len()];
-            let n = pl_l2pi(ll, 0, &mut out, expected.len());
+            let n = pl_l2pi(ll, 0, &mut out, expected.len()).expect("list fits in the source");
             assert_eq!(n, expected.len());
             assert_eq!(&out[..], *expected, "decoding of {ll:?}");
         }
@@ -598,7 +621,7 @@ mod tests {
             assert_eq!(n, max, "{npix} pixels wrote {n} words, bound is {max}");
 
             let mut out = vec![0i32; npix];
-            assert_eq!(pl_l2pi(&ll[..n], 0, &mut out, npix), npix);
+            assert_eq!(pl_l2pi(&ll[..n], 0, &mut out, npix), Some(npix));
             assert_eq!(out, input, "worst-case {npix} pixels did not round trip");
         }
     }
@@ -624,6 +647,39 @@ mod tests {
         // And nothing at all to write the header into.
         let mut tiny = [0i16; LL_CURHDRLEN as usize - 1];
         assert_eq!(pl_p2li(&[1], 0, &mut tiny, 1), None);
+    }
+
+    /// A source shorter than the list its header declares is reported, not read
+    /// past.
+    #[test]
+    fn truncated_source_returns_none() {
+        let input = worst_case(50);
+        let ll = encode(&input);
+        let mut out = vec![0i32; input.len()];
+
+        // The whole list decodes.
+        assert_eq!(
+            pl_l2pi(&ll, 0, &mut out, input.len()),
+            Some(input.len()),
+            "the untruncated list should decode"
+        );
+
+        // Every truncation of it is rejected.
+        for n in 0..ll.len() {
+            assert_eq!(
+                pl_l2pi(&ll[..n], 0, &mut out, input.len()),
+                None,
+                "a {n}-word source should not decode a {}-word list",
+                ll.len()
+            );
+        }
+
+        // A two-word `I_SH` whose second word falls off the end, which the
+        // length check alone does not catch: the header counts it in.
+        let mut sh_at_end = ll.clone();
+        let last = sh_at_end.len() - 1;
+        sh_at_end[last] = (M_SH + 1) as i16;
+        assert_eq!(pl_l2pi(&sh_at_end, 0, &mut out, input.len()), None);
     }
 
     /// Two words per pixel -- CFITSIO's pre-#174 figure, and what this crate's

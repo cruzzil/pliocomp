@@ -5,6 +5,27 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0]
+
+### Fixed
+
+- `pl_l2pi` no longer reads past the end of `ll_src`. The word count it decodes
+  comes from the line list's own header, so a truncated or corrupt list sent the
+  scan beyond the source. It now returns `None` instead — for a source too short
+  to hold the header, for a header declaring more words than the source holds,
+  and for a two-word `I_SH` whose second word falls off the end.
+
+  This is the bounds check CFITSIO added in 4.7.0, where `pl_l2pi` gained a
+  `srclen` argument and `imcomp_decompress_tile` turns a negative return into
+  `DATA_DECOMPRESSION_ERR`. There the over-read was undefined behaviour; here
+  `ll_src` is a bounds-checked slice, so it was a panic and never a bad read.
+
+### Changed
+
+- **Breaking:** `pl_l2pi` returns `Option<usize>` rather than `usize`, matching
+  `pl_p2li`. Existing calls need `.unwrap()`, `.expect(...)` or real handling; a
+  list this crate encoded always decodes.
+
 ## [0.6.0]
 
 ### Fixed

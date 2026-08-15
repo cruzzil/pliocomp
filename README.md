@@ -29,7 +29,7 @@ The crate exposes a single pair of inverse functions — a lossless codec:
 | Function | Direction | Meaning |
 |----------|-----------|---------|
 | `pl_p2li(pxsrc, xs, lldst, npix) -> Option<usize>` | pixels → line list | **encode** ("pixel to line list"), returns the list length, or `None` if `lldst` was too small |
-| `pl_l2pi(ll_src, xs, px_dst, npix) -> usize` | line list → pixels | **decode** ("line list to pixel"), returns the pixel count |
+| `pl_l2pi(ll_src, xs, px_dst, npix) -> Option<usize>` | line list → pixels | **decode** ("line list to pixel"), returns the pixel count, or `None` if `ll_src` is shorter than the list its header declares |
 | `pl_p2li_max_len(npix) -> usize` | — | worst-case line-list length for `npix` pixels; size the encode buffer with this and `pl_p2li` cannot fail |
 
 ```rust
@@ -45,7 +45,7 @@ let ll_len = pl_p2li(&pixels, 0, &mut line_list, pixels.len()).unwrap();
 
 // Decode back into a pixel buffer.
 let mut decoded = vec![0i32; pixels.len()];
-let n = pl_l2pi(&line_list[..ll_len], 0, &mut decoded, pixels.len());
+let n = pl_l2pi(&line_list[..ll_len], 0, &mut decoded, pixels.len()).unwrap();
 
 assert_eq!(&decoded[..n], &pixels[..]);
 ```
