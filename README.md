@@ -3,7 +3,7 @@
 [![Crates.io](https://img.shields.io/crates/v/pliocomp.svg)](https://crates.io/crates/pliocomp)
 [![Actions Status](https://github.com/cruzzil/pliocomp/workflows/CI/badge.svg)](https://github.com/cruzzil/pliocomp/actions)
 [![Documentation](https://docs.rs/pliocomp/badge.svg)](https://docs.rs/pliocomp/)
-[![codecov](https://codecov.io/gh/cruzzil/pliocomp/branch/main/graph/badge.svg?token=0DNCU7VRH2)](https://codecov.io/gh/cruzzil/pliocomp)
+[![codecov](https://codecov.io/gh/cruzzil/pliocomp/graph/badge.svg?token=0DNCU7VRH2)](https://codecov.io/gh/cruzzil/pliocomp)
 [![Dependency status](https://deps.rs/repo/github/cruzzil/pliocomp/status.svg)](https://deps.rs/repo/github/cruzzil/pliocomp)
 
 `pliocomp` is a small, dependency-free Rust crate implementing **PLIO** (Pixel LIst I/O)
